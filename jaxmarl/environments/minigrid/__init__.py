@@ -1,0 +1,1 @@
+from majax.envs.minigrid.utils.visualizer import MiniGridVisualizer

@@ -1,0 +1,1 @@
+from majax.envs.minigrid.utils.minigrid_env import MiniGridEnv, Tiles, State 
