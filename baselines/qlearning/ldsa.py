@@ -701,7 +701,7 @@ def make_train(config, env):
       _rng,
     )
     runner_state, metrics = jax.lax.scan(
-      _update_step, runner_state, None, 2 # config["num_updates"]
+      _update_step, runner_state, None, config["num_updates"]
     )
     return {"runner_state": runner_state, "metrics": metrics}
 
@@ -758,7 +758,7 @@ def main(config):
   outs = jax.block_until_ready(train_vjit(rngs))
 
   # save params
-  if config["SAVE_PATH"] is not None:
+  if config["save_path"] is not None:
 
     def save_params(params: Dict, filename: Union[str, os.PathLike]) -> None:
       flattened_dict = flatten_dict(params, sep=",")
@@ -768,7 +768,7 @@ def main(config):
     params = jax.tree_map(
       lambda x: x[0], model_state.params
     )  # save only params of the firt run
-    save_dir = os.path.join(config["SAVE_PATH"], env_name)
+    save_dir = os.path.join(config["save_path"], env_name)
     os.makedirs(save_dir, exist_ok=True)
     save_params(params, f"{save_dir}/{alg_name}.safetensors")
     print(f"Parameters of first batch saved in {save_dir}/{alg_name}.safetensors")
