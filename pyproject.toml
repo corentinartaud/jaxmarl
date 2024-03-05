@@ -5,6 +5,20 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ['jaxmarl*']
 
+[tool.ruff]
+exclude = []
+include = ["pyproject.toml", "*.py",]
+
+# Deviate from Black
+line-length = 88
+indent-width = 2
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+
 [tool.setuptools.dynamic]
 version = {attr = "jaxmarl.__version__"}
 dependencies = {file = ["requirements/requirements.txt"]}
