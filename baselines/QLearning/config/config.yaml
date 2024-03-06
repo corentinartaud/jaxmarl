@@ -1,11 +1,11 @@
 # experiment params
-"NUM_SEEDS": 2
-"SEED": 0
+num_seeds: 2
+seed: 0
 
 # wandb params
-"ENTITY": ""
-"PROJECT": ""
-"WANDB_MODE": "disabled"
+entity: ""
+project: ""
+wandb_mode: "disabled"
 
 # where to save the params (if None, will not save)
-"SAVE_PATH": "baselines/QLearning/checkpoints"
+save_path: "baselines/qlearning/checkpoints"
