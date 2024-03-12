@@ -3,7 +3,7 @@ num_seeds: 1
 seed: 0
 
 # wandb params
-entity: ""
+entity: "corentinartaud"
 project: ""
 wandb_mode: "disabled"
 

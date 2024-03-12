@@ -690,7 +690,8 @@ def main(config: DictConfig):
 
     scenario = map_name_to_scenario(config["env"]["map_name"])
     config["env"]["env_kwargs"]["scenario"] = scenario
-    env = jaxmarl.make(env_name, **config["env"]["env_kwargs"])
+    env_name = f"{config['env']['env_name']}_{config['env']['map_name']}"
+    env = jaxmarl.make(config["env"]["env_name"], **config["env"]["env_kwargs"])
     env = SMAXLogWrapper(env)
   
   wandb.init(
