@@ -1,10 +1,14 @@
-num_envs: 8
+num_envs: 16
 num_steps: 128
+num_mini_updates: 4
 buffer_size: 3000
 buffer_batch_size: 32
-total_timesteps: 20000000
-agent_hidden_dim: 256
+total_timesteps: 10000000
+agent_hidden_dim: 32
 agent_init_scale: 1.
+agent_transf_num_layers: 2
+agent_transf_num_heads: 8
+agent_transf_ff_dim: 128
 parameters_sharing: True
 epsilon_start: 1.0
 epsilon_finish: 0.05
@@ -21,7 +25,6 @@ weight_decay_adam: 0.000001
 td_lambda_loss: False
 td_lambda: 0.6
 gamma: 0.99
-verbose: false
-wandb_online_report: True
+verbose: True
 num_test_episodes: 32
 test_interval: 100000
