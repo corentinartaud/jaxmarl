@@ -260,7 +260,7 @@ def make_train(config):
                         # RERUN NETWORK
                         _, pi, value = network.apply(
                             params,
-                            init_hstate.transpose(),
+                            init_hstate.squeeze(),
                             (traj_batch.obs, traj_batch.done),
                         )
                         log_prob = pi.log_prob(traj_batch.action)
@@ -316,7 +316,7 @@ def make_train(config):
                 rng, _rng = jax.random.split(rng)
 
                 init_hstate = jnp.reshape(
-                    init_hstate, (config["NUM_STEPS"], config["NUM_ACTORS"])
+                    init_hstate, (1, config["NUM_ACTORS"], -1)
                 )
                 batch = (
                     init_hstate,
@@ -348,7 +348,7 @@ def make_train(config):
                 )
                 update_state = (
                     train_state,
-                    init_hstate,
+                    init_hstate.squeeze(),
                     traj_batch,
                     advantages,
                     targets,
@@ -356,7 +356,7 @@ def make_train(config):
                 )
                 return update_state, total_loss
 
-            init_hstate = initial_hstate[None, :].squeeze().transpose()
+            # init_hstate = initial_hstate[None, :].squeeze().transpose()
             update_state = (
                 train_state,
                 init_hstate,

@@ -1,5 +1,5 @@
 # experiment params
-num_seeds: 1
+num_seeds: 4
 seed: 0
 
 # wandb params
