@@ -19,13 +19,14 @@ import optax
 import flax.linen as nn
 from flax.core import frozen_dict
 from flax.training.train_state import TrainState
-from flax.traverse_util import flatten_dict
+from flax.traverse_util import flatten_dict, unflatten_dict
 import flashbax as fbx
 from einops import repeat
 import wandb
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
-from safetensors.flax import save_file
+from safetensors.flax import save_file, load_file
 from rich import print
 
 from jaxmarl import make
@@ -79,16 +80,16 @@ class AgentRNN(nn.Module):
     # agent embedding
     agent_embed = nn.Dense(
       self.hidden_dim,
-      kernel_init=nn.initializers.orthogonal(self.init_scale),
-      bias_init=nn.initializers.constant(0.0),
+      # kernel_init=nn.initializers.orthogonal(self.init_scale),
+      # bias_init=nn.initializers.constant(0.0),
     )(obs)
     agent_embed = nn.relu(agent_embed)
     rnn_in = (agent_embed, done)
     h1, agent_embed = ScannedRNN()(hidden[0], rnn_in)
     agent_embed = nn.Dense(
       self.subtask_dim,
-      kernel_init=nn.initializers.orthogonal(self.init_scale),
-      bias_init=nn.initializers.constant(0.0),
+      # kernel_init=nn.initializers.orthogonal(self.init_scale),
+      # bias_init=nn.initializers.constant(0.0),
     )(agent_embed)
     agent_embed = jnp.transpose(
       agent_embed.reshape((time_steps, n_agents, batch_size, -1)), 
@@ -100,14 +101,14 @@ class AgentRNN(nn.Module):
     subtask_embed = nn.Sequential([
       nn.Dense(
         self.subtask_dim,
-        kernel_init=nn.initializers.orthogonal(self.init_scale),
-        bias_init=nn.initializers.constant(0.0),
+        # kernel_init=nn.initializers.xavier_uniform,
+        # bias_init=nn.initializers.constant(0.0),
       ),
       nn.relu,
       nn.Dense(
         self.subtask_dim,
-        kernel_init=nn.initializers.orthogonal(self.init_scale),
-        bias_init=nn.initializers.constant(0.0),
+        # kernel_init=nn.initializers.orthogonal(self.init_scale),
+        # bias_init=nn.initializers.constant(0.0),
       ),
     ])(subtask_onehot)
     subtask_embed = nn.tanh(subtask_embed)
@@ -126,8 +127,8 @@ class AgentRNN(nn.Module):
     # subtask policy
     subtask_policy = nn.Dense(
       self.hidden_dim,
-      kernel_init=nn.initializers.orthogonal(self.init_scale),
-      bias_init=nn.initializers.constant(0.0),
+      # kernel_init=nn.initializers.orthogonal(self.init_scale),
+      # bias_init=nn.initializers.constant(0.0),
     )(obs)
     subtask_policy = nn.relu(subtask_policy)
     rnn_in = (subtask_policy, done)
@@ -137,16 +138,16 @@ class AgentRNN(nn.Module):
     _subtask_embed = jax.lax.stop_gradient(subtask_embed[:, 0]) # (time_steps, n_subtasks, embed_dim)
     subtask_w1 = nn.Dense(
       self.hidden_dim * self.action_dim,
-      kernel_init=nn.initializers.orthogonal(self.init_scale),
-      bias_init=nn.initializers.constant(0.0),
+      # kernel_init=nn.initializers.orthogonal(self.init_scale),
+      # bias_init=nn.initializers.constant(0.0),
     )(_subtask_embed) # (time_steps, n_subtasks, hidden_dim * action_dim)
     subtask_w1 = repeat(subtask_w1, "t s h -> t b s h", b=n_agents * batch_size) # (time_steps, n_agents * batch_size, n_subtasks, ...)
     subtask_w1 = subtask_w1.reshape((time_steps, -1, self.hidden_dim, self.action_dim)) # (time_steps, ..., hidden_dim, action_dim)
     
     subtask_b1 = nn.Dense(
       self.action_dim,
-      kernel_init=nn.initializers.orthogonal(self.init_scale),
-      bias_init=nn.initializers.constant(0.0),
+      # kernel_init=nn.initializers.orthogonal(self.init_scale),
+      # bias_init=nn.initializers.constant(0.0),
     )(_subtask_embed) # (time_steps, n_subtasks, action_dim)
     subtask_b1 = repeat(subtask_b1, "t s a -> t b s a", b=n_agents * batch_size) # (time_steps, n_agents * batch_size, n_subtasks, ...)
     subtask_b1 = subtask_b1.reshape((time_steps, -1, 1, self.action_dim)) # (time_steps, ..., 1, action_dim)
@@ -159,7 +160,10 @@ class AgentRNN(nn.Module):
     subtask_prob = subtask_prob.reshape((time_steps, -1, 1, self.num_subtasks))
     q_vals = jnp.squeeze(jnp.matmul(subtask_prob, q_vals), axis=-2)
 
-    return (h1, h2), q_vals, subtask_logits, subtask_embed
+    return (
+      (h1, h2), q_vals, subtask_logits, subtask_embed
+      # if not eval else (h1, h2), q_vals, subtask_logits, subtask_embed, subtask_prob
+    )
   # fmt: on
 
 
@@ -708,6 +712,110 @@ def make_train(config, env):
   return train
 
 
+def make_test(config, env):
+  
+  def load_params(filename):
+    flattened_dict = load_file(filename)
+    return unflatten_dict(flattened_dict, sep=',')
+
+  def test(rng):
+    # INIT ENV
+    test_env = CTRolloutManager(env, batch_size=config["alg"]["num_test_episodes"])
+    rng, _rng = jax.random.split(rng)
+    init_obs, env_state = test_env.batch_reset(_rng)
+    init_dones = {
+      agent: jnp.zeros((config["alg"]["num_test_episodes"]), dtype=bool)
+      for agent in env.agents + ["__all__"]
+    }
+    # INIT AGENT
+    agent = AgentRNN(
+      action_dim=test_env.max_action_space,
+      hidden_dim=config["alg"]["agent_hidden_dim"],
+      subtask_dim=config["alg"]["agent_subtask_dim"],
+      num_subtasks=config["alg"]["agent_num_subtasks"],
+      init_scale=config["alg"]["agent_init_scale"],
+    )
+    params = load_params(
+      os.path.join(
+        os.path.dirname(__file__), 
+        "checkpoints", 
+        f"{config['env']['env_name']}_{config['env']['map_name']}", 
+        "ldsa_ps.safetensors"
+      )
+    )["agent"]
+    
+    # fmt: off
+    def homogeneous_pass(params, hidden_state, obs, dones, rng):
+      # concatenate agents and parallel envs to process them in one batch
+      agents, flatten_agents_obs = zip(*obs.items())
+      original_shape = flatten_agents_obs[0].shape  # assumes obs shape is the same for all agents
+      batched_input = (
+        jnp.stack(flatten_agents_obs, axis=1),  # (time_step, n_agents, n_envs, obs_size)
+        jnp.concatenate([dones[agent] for agent in agents], axis=1),  # ensure to not pass other keys (like __all__)
+      )
+      hidden_state, q_vals, *_, probs = agent.apply(params, hidden_state, batched_input, eval=True, rngs={"random": rng})
+      q_vals = q_vals.reshape(original_shape[0], len(agents), *original_shape[1:-1], -1)  # (time_steps, n_agents, n_envs, action_dim)
+      q_vals = {a: q_vals[:, i] for i, a in enumerate(agents)}
+      probs = probs.reshape(original_shape[0], len(agents), *original_shape[1:-1], -1)
+      return hidden_state, q_vals, probs
+    # fmt: on
+
+    def _greedy_env_step(step_state, _):
+      params, env_state, last_obs, last_dones, hstate, rng = step_state
+      rng, rng_p, rng_s = jax.random.split(rng, 3)
+      obs_ = {a: last_obs[a] for a in env.agents}
+      obs_ = jax.tree_map(lambda x: x[np.newaxis, :], obs_)
+      dones_ = jax.tree_map(lambda x: x[np.newaxis, :], last_dones)
+      hstate, q_vals, subtask_prob = homogeneous_pass(params, hstate, obs_, dones_, rng_p)
+      id_print(subtask_prob[:, 0])
+      actions = jax.tree_util.tree_map(lambda q: jnp.argmax(q.squeeze(0), axis=-1), q_vals)  # fmt: skip
+      obs, env_state, rewards, dones, infos = test_env.batch_step(rng_s, env_state, actions)  # fmt: skip
+      step_state = (params, env_state, obs, dones, hstate, rng)
+      return step_state, (rewards, dones, infos)
+
+    rng, _rng = jax.random.split(rng)
+    init_hstate = tuple(
+      [
+        ScannedRNN.initialize_carry(
+          config["alg"]["agent_hidden_dim"], len(env.agents) * config["alg"]["num_test_episodes"]
+        )  # (n_agents * n_envs, hs_size)
+        for _ in range(2)
+      ]
+    )
+    step_state = (
+      params,
+      env_state,
+      init_obs,
+      init_dones,
+      init_hstate,
+      _rng,
+    )
+    step_state, (rewards, dones, infos) = jax.lax.scan(
+      _greedy_env_step, step_state, None, config["alg"]["num_steps"]
+    )
+
+    # compute the metrics of the first episode that is done for each parallel env
+    def first_episode_returns(rewards, dones):
+      first_done = jax.lax.select(
+        jnp.argmax(dones) == 0.0, dones.size, jnp.argmax(dones)
+      )
+      first_episode_mask = jnp.where(
+        jnp.arange(dones.size) <= first_done, True, False
+      )
+      return jnp.where(first_episode_mask, rewards, 0.0).sum()
+
+    all_dones = dones["__all__"]
+    first_returns = jax.tree_map(
+      lambda r: jax.vmap(first_episode_returns, in_axes=1)(r, all_dones), rewards
+    )
+    jax.debug.callback(
+      lambda r: print(f"Return: {r}"),
+      first_returns["__all__"].mean(),
+    )
+
+  return test
+
+
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(config):
   config = OmegaConf.to_container(config)
@@ -751,28 +859,25 @@ def main(config):
     config=config,
     mode=config["wandb_mode"],
   )
-
+  
   rng = jax.random.PRNGKey(config["seed"])
-  rngs = jax.random.split(rng, config["num_seeds"])
-  train_vjit = jax.jit(jax.vmap(make_train(config["alg"], env)))
-  outs = jax.block_until_ready(train_vjit(rngs))
+  if config.get("train", True):
+    rngs = jax.random.split(rng, config["num_seeds"])
+    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], env)))
+    outs = jax.block_until_ready(train_vjit(rngs))
 
-  # save params
-  if config["save_path"] is not None:
-
-    def save_params(params: Dict, filename: Union[str, os.PathLike]) -> None:
-      flattened_dict = flatten_dict(params, sep=",")
-      save_file(flattened_dict, filename)
-
-    model_state = outs["runner_state"][0]
-    params = jax.tree_map(
-      lambda x: x[0], model_state.params
-    )  # save only params of the firt run
-    save_dir = os.path.join(config["save_path"], env_name)
-    os.makedirs(save_dir, exist_ok=True)
-    save_params(params, f"{save_dir}/{alg_name}.safetensors")
-    print(f"Parameters of first batch saved in {save_dir}/{alg_name}.safetensors")
-
+    # SAVE PARAMETERS
+    if config["save_path"] is not None and (HydraConfig.get().runtime.output_dir != os.path.dirname(__file__)):
+      # remove batch dimension from saved params
+      params = jax.tree_map(lambda x: x[0], outs["runner_state"][0].params)
+      save_dir = os.path.join(HydraConfig.get().runtime.output_dir, config["save_path"])
+      os.makedirs(save_dir, exist_ok=True)
+      fn = f"{save_dir}/{alg_name}.safetensors"
+      save_file(flatten_dict(params, sep=","), fn)
+      print(f"Parameters of first batch saved in {fn}")
+  else:
+     test_vjit = jax.jit(make_test(config, env))
+     outs = jax.block_until_ready(test_vjit(rng))
 
 if __name__ == "__main__":
   main()
