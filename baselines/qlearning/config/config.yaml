@@ -1,5 +1,5 @@
 # experiment params
-"NUM_SEEDS": 2
+"NUM_SEEDS": 1
 "SEED": 0
 
 # wandb params
@@ -9,3 +9,8 @@
 
 # where to save the params (if None, will not save)
 "SAVE_PATH": "baselines/QLearning/checkpoints"
+
+hydra:
+  sweeper:
+    params:
+      "SEED": 0,1,2,3,4,5

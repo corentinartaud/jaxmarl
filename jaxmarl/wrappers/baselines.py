@@ -320,3 +320,4 @@ class CTRolloutManager(JaxMARLWrapper):
         # concatenate the extra features
         arr = jnp.concatenate((arr, extra_features), axis=-1)
         return arr
+    

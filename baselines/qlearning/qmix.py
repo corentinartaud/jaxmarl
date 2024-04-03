@@ -18,6 +18,7 @@ The implementation closely follows the original Pymarl: https://github.com/oxwhi
 import os
 import jax
 import jax.numpy as jnp
+from jax.experimental.host_callback import id_print
 import numpy as np
 from functools import partial
 from typing import NamedTuple, Dict, Union
@@ -31,14 +32,17 @@ import flashbax as fbx
 from flax.core import frozen_dict
 import wandb
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 from safetensors.flax import save_file
 from flax.traverse_util import flatten_dict
+from rich import print
 
 from jaxmarl import make
-from jaxmarl.wrappers.baselines import LogWrapper, SMAXLogWrapper, CTRolloutManager
+from jaxmarl.wrappers.baselines import LogWrapper, SMAXLogWrapper, CTRolloutManager, save_params
 from jaxmarl.environments.smax import map_name_to_scenario
 from jaxmarl.environments.overcooked import overcooked_layouts
+from utils import log_metrics
 
 
 class ScannedRNN(nn.Module):
@@ -328,7 +332,6 @@ def make_train(config, env):
                 step_state = (params, env_state, obs, dones, hstate, rng, t+1)
                 return step_state, transition
 
-
             # prepare the step state and collect the episode trajectory
             rng, _rng = jax.random.split(rng)
             if config["PARAMETERS_SHARING"]:
@@ -349,7 +352,6 @@ def make_train(config, env):
             step_state, traj_batch = jax.lax.scan(
                 _env_step, step_state, None, config["NUM_STEPS"]
             )
-
             # BUFFER UPDATE: save the collected trajectory in the buffer
             buffer_traj_batch = jax.tree_util.tree_map(
                 lambda x:jnp.swapaxes(x, 0, 1)[:, np.newaxis], # put the batch dim first and add a dummy sequence dim
@@ -456,7 +458,7 @@ def make_train(config, env):
             # update the states
             time_state['timesteps'] = step_state[-1]
             time_state['updates']   = time_state['updates'] + 1
-
+            
             # update the target network if necessary
             target_network_params = jax.lax.cond(
                 time_state['updates'] % config['TARGET_UPDATE_INTERVAL'] == 0,
@@ -485,23 +487,27 @@ def make_train(config, env):
             metrics['test_metrics'] = test_metrics # add the test metrics dictionary
 
             if config.get('WANDB_ONLINE_REPORT', False):
-                def callback(metrics, infos):
+                def callback(metrics, infos, params):
                     info_metrics = {
                         k:v[...,0][infos["returned_episode"][..., 0]].mean()
                         for k,v in infos.items() if k!="returned_episode"
                     }
+                    info_metrics.update({
+                        "returns": metrics['rewards']['__all__'].mean(),
+                        "loss": metrics["loss"],
+                        "epsilon": metrics["eps"],
+                    })
                     wandb.log(
                         {
-                            "returns": metrics['rewards']['__all__'].mean(),
                             "timestep": metrics['timesteps'],
                             "updates": metrics['updates'],
-                            "loss": metrics['loss'],
-                            'epsilon': metrics['eps'],
                             **info_metrics,
                             **{k:v.mean() for k, v in metrics['test_metrics'].items()}
                         }
                     )
-                jax.debug.callback(callback, metrics, traj_batch.infos)
+                    if (metrics["updates"] == 1) or (metrics['updates'] % (config["LOG_INTERVAL"] // config["NUM_STEPS"] // config["NUM_ENVS"]) == 0):
+                      log_metrics(config["output_dir"], info_metrics, metrics['timesteps'])
+                jax.debug.callback(callback, metrics, traj_batch.infos, train_state.params)
 
             runner_state = (
                 train_state,
@@ -562,9 +568,14 @@ def make_train(config, env):
                 **{'test_'+k:v for k,v in first_infos.items()}
             }
             if config.get('VERBOSE', False):
-                def callback(timestep, val):
+                def callback(timestep, val, metrics, params):
                     print(f"Timestep: {timestep}, return: {val}")
-                jax.debug.callback(callback, time_state['timesteps']*config['NUM_ENVS'], first_returns['__all__'].mean())
+                    log_metrics(config["output_dir"], {k:v.mean() for k, v in metrics.items()}, timestep)
+                    params = jax.tree_map(lambda x: x[0], params) # save only params of the firt run
+                    save_dir = os.path.join(config["output_dir"], "checkpoints")
+                    os.makedirs(save_dir, exist_ok=True)
+                    save_params(params, f'{save_dir}/{timestep.item()}.safetensors')
+                jax.debug.callback(callback, time_state['timesteps'] * config['NUM_ENVS'], first_returns['__all__'].mean(), metrics, params)
             return metrics
         
         time_state = {
@@ -588,7 +599,7 @@ def make_train(config, env):
             _rng
         )
         runner_state, metrics = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
+            _update_step, runner_state, None,  config["NUM_UPDATES"]
         )
         return {'runner_state':runner_state, 'metrics':metrics}
     
@@ -634,6 +645,7 @@ def main(config):
         config=config,
         mode=config["WANDB_MODE"],
     )
+    config["alg"]["output_dir"] = os.path.join(HydraConfig.get().runtime.output_dir)
     
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
