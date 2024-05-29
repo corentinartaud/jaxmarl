@@ -4,7 +4,7 @@ import chex
 from typing import Tuple, Dict
 from functools import partial
 from jaxmarl.environments.mpe.simple import State, SimpleMPE
-from gymnax.environments.spaces import Box
+from jaxmarl.environments.spaces import Box, Discrete
 from jaxmarl.environments.mpe.default_params import *
 
 
@@ -22,10 +22,10 @@ class SimpleFacmacMPE(SimpleMPE):
         num_adversaries=3,
         num_landmarks=2,
         view_radius=1.5,  # set -1 to deactivate
-        score_function="sum"
+        score_function="sum",
+        action_type=CONTINUOUS_ACT
     ):
         dim_c = 2  # NOTE follows code rather than docs
-        action_type = CONTINUOUS_ACT
         view_radius = view_radius if view_radius != -1 else 999999
 
         num_agents = num_good_agents + num_adversaries
@@ -81,12 +81,16 @@ class SimpleFacmacMPE(SimpleMPE):
             max_speed=max_speed,
             collide=collide,
         )
-
-        # Overwrite action and observation spaces
+        # Overwrite action and observation spaces + agents
         self.observation_spaces = {
             i: Box(-jnp.inf, jnp.inf, (16,)) for i in self.adversaries
         }
-        self.action_spaces = {i: Box(0.0, 1.0, (5,)) for i in self.adversaries}
+        if action_type == CONTINUOUS_ACT:
+            self.action_spaces = {i: Box(0.0, 1.0, (5,)) for i in self.adversaries}
+        # NOTE: Discrete action space currently are being tested for Q-Learning baselines
+        # therefore, the action space gets set to Discrete(5) for all agents (i.e. adversaries and good agents)
+        # however, since we use the CTRolloutManager and take the max actions, this should not be a problem.
+        # Additonally, similarily to IPPO we execute an action for the prey agents using the network but ignore them.
 
         # Introduce partial observability by limiting the agents' view radii
         self.view_radius = jnp.concatenate(
@@ -213,7 +217,7 @@ class SimpleFacmacMPE(SimpleMPE):
 
         info = {}
 
-        dones = {a: done[i] for i, a in enumerate(self.agents)}
+        dones = {a: done[i] for i, a in enumerate(self.adversaries + self.good_agents)}
         dones.update({"__all__": jnp.all(done)})
 
         return obs, state, reward, dones, info

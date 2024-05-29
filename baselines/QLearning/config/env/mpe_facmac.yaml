@@ -1,0 +1,8 @@
+"ENV_NAME": "MPE_simple_facmac_v1"
+"ENV_KWARGS": 
+  "num_good_agents": 1
+  "num_adversaries": 3
+  "num_landmarks": 2
+  "view_radius": 1.5
+  "score_function": "min"
+  "action_type": "Discrete"
