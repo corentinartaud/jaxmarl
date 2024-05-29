@@ -217,7 +217,7 @@ class SimpleFacmacMPE(SimpleMPE):
 
         info = {}
 
-        dones = {a: done[i] for i, a in enumerate(self.adversaries + self.good_agents)}
+        dones = {a: done[i] for i, a in enumerate(self.agents)}
         dones.update({"__all__": jnp.all(done)})
 
         return obs, state, reward, dones, info
